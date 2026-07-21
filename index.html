@@ -167,9 +167,180 @@ D:\chess-vision\venv\Scripts\python.exe vision\live_server.py
           <td>58 held-out real photos</td><td class="serif">99.5%</td><td class="serif">99.5%</td></tr>
         <tr><td class="big">Synthetic boards<br><span style="color:var(--ink-soft);font-size:12.5px">Mask R-CNN</span></td>
           <td>40 held-out synthetic scenes</td><td class="serif">99.0%</td><td class="serif">97.7%</td></tr>
+        <tr><td class="big">Combined (owner's set)<br><span style="color:var(--ink-soft);font-size:12.5px">Faster R-CNN, photo-traced pieces</span></td>
+          <td>58 real + 48 digital held-out</td><td class="serif">99.5% / 96.5%</td><td class="serif">99.5% / 98.6%</td></tr>
       </tbody>
     </table>
   </div>
+
+  <h2 class="section" id="try">VII &middot; Test it yourself</h2>
+  <p class="section-sub">Upload a photo or a <b>video</b> of a board, or point your webcam at one, and the
+  recognizer marks every piece live. Inference runs on the local engine
+  (<code>vision/live_server.py</code> on this computer) &mdash; this page just talks to it, so it works only
+  in a browser on the machine where the engine is running.</p>
+  <div class="callout" id="try-status">Checking whether the local engine is running&hellip;</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0;">
+    <button class="try-btn" id="btn-photo">Upload photo</button>
+    <button class="try-btn" id="btn-video">Upload video</button>
+    <button class="try-btn" id="btn-cam">Use webcam</button>
+    <span style="flex:1"></span>
+    <label style="font-size:13px;color:var(--ink-soft);align-self:center;">model
+      <select id="try-model" style="margin-left:6px;">
+        <option value="combined">your set (combined)</option>
+        <option value="real">real-photo only</option>
+      </select>
+    </label>
+    <label style="font-size:13px;color:var(--ink-soft);align-self:center;">confidence
+      <input type="range" id="try-thr" min="0.5" max="0.9" step="0.05" value="0.7" style="vertical-align:middle;">
+      <span id="try-thr-out">0.70</span>
+    </label>
+  </div>
+  <input type="file" id="file-photo" accept="image/*" style="display:none">
+  <input type="file" id="file-video" accept="video/*" style="display:none">
+  <div id="try-stage" style="position:relative;display:none;max-width:100%;">
+    <img id="try-img" style="max-width:100%;display:none;border-radius:8px;">
+    <video id="try-vid" controls playsinline style="max-width:100%;display:none;border-radius:8px;"></video>
+    <canvas id="try-overlay" style="position:absolute;left:0;top:0;pointer-events:none;"></canvas>
+  </div>
+  <p id="try-report" style="font-size:13.5px;color:var(--ink-soft);"></p>
+  <style>
+    .try-btn { font: inherit; font-size: 14px; padding: 8px 14px; border: 1px solid var(--line);
+               background: var(--plate); color: var(--ink); border-radius: 8px; cursor: pointer; }
+    .try-btn:hover { border-color: var(--walnut); }
+    .try-btn.on { border-color: var(--walnut); box-shadow: inset 0 0 0 1px var(--walnut); }
+  </style>
+  <script>
+  (function () {
+    var ENGINE = "http://localhost:8173";
+    var statusEl = document.getElementById("try-status");
+    var stage = document.getElementById("try-stage");
+    var img = document.getElementById("try-img");
+    var vid = document.getElementById("try-vid");
+    var overlay = document.getElementById("try-overlay");
+    var report = document.getElementById("try-report");
+    var thrIn = document.getElementById("try-thr");
+    var thrOut = document.getElementById("try-thr-out");
+    var grab = document.createElement("canvas");
+    var mode = null, camStream = null, busy = false, engineUp = false;
+
+    thrIn.oninput = function () { thrOut.textContent = Number(thrIn.value).toFixed(2); };
+
+    function setStatus(html, ok) {
+      statusEl.innerHTML = html;
+      statusEl.style.borderColor = ok ? "var(--ok)" : "var(--err)";
+    }
+    function ping() {
+      fetch(ENGINE + "/health").then(function (r) { return r.json(); }).then(function (h) {
+        engineUp = true;
+        if (h.training) { setStatus("<b>Engine online</b> &mdash; but training is running, inference paused until it finishes.", false); }
+        else if (h.ready === false) { setStatus("<b>Engine online</b>, model still loading&hellip;", false); }
+        else { setStatus("<b>Engine online</b> (" + (h.device || "?") + ") &mdash; pick a photo, a video, or the webcam below.", true); }
+      }).catch(function () {
+        engineUp = false;
+        setStatus("<b>Local engine not reachable.</b> On the computer with the project, ask Claude to start it (it runs <code>vision/live_server.py</code>), then reload this page.", false);
+      });
+    }
+    ping(); setInterval(ping, 4000);
+
+    document.getElementById("try-model").onchange = function () {
+      fetch(ENGINE + "/model?use=" + this.value, { method: "POST" });
+    };
+
+    function fitOverlay(el) {
+      overlay.width = el.clientWidth; overlay.height = el.clientHeight;
+      overlay.style.width = el.clientWidth + "px"; overlay.style.height = el.clientHeight + "px";
+    }
+    function draw(dets, srcW, srcH, el) {
+      fitOverlay(el);
+      var g = overlay.getContext("2d");
+      g.clearRect(0, 0, overlay.width, overlay.height);
+      var sx = overlay.width / srcW, sy = overlay.height / srcH;
+      g.lineWidth = 2; g.font = "12px sans-serif"; g.textBaseline = "bottom";
+      var counts = 0;
+      dets.forEach(function (d) {
+        var c = d.color === "white" ? "#2f8f4e" : "#b03535";
+        g.strokeStyle = c; g.fillStyle = c;
+        g.strokeRect(d.x0 * sx, d.y0 * sy, (d.x1 - d.x0) * sx, (d.y1 - d.y0) * sy);
+        g.fillText(d.color[0].toUpperCase() + " " + d.piece + " " + d.conf.toFixed(2),
+                   d.x0 * sx + 2, d.y0 * sy - 2);
+        counts++;
+      });
+      return counts;
+    }
+    function infer(blob, cb) {
+      if (busy) return; busy = true;
+      fetch(ENGINE + "/infer?thr=" + thrIn.value, { method: "POST", body: blob })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { busy = false; if (j.dets) cb(j.dets, j.ms); })
+        .catch(function () { busy = false; });
+    }
+    function stopCam() {
+      if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; }
+    }
+    function setMode(m, btn) {
+      mode = m; stopCam();
+      ["btn-photo", "btn-video", "btn-cam"].forEach(function (id) {
+        document.getElementById(id).classList.toggle("on", id === btn);
+      });
+      overlay.getContext("2d").clearRect(0, 0, overlay.width, overlay.height);
+      report.textContent = "";
+    }
+
+    document.getElementById("btn-photo").onclick = function () {
+      setMode("photo", "btn-photo"); document.getElementById("file-photo").click();
+    };
+    document.getElementById("file-photo").onchange = function () {
+      var f = this.files[0]; if (!f) return;
+      stage.style.display = "block"; vid.style.display = "none"; img.style.display = "block";
+      img.onload = function () {
+        infer(f, function (dets, ms) {
+          var n = draw(dets, img.naturalWidth, img.naturalHeight, img);
+          report.textContent = n + " pieces found in " + ms + " ms.";
+        });
+      };
+      img.src = URL.createObjectURL(f);
+    };
+
+    function frameLoop(srcEl) {
+      if (mode !== "video" && mode !== "cam") return;
+      var w = srcEl.videoWidth, h = srcEl.videoHeight;
+      if (!w || (mode === "video" && (srcEl.paused || srcEl.ended))) {
+        setTimeout(function () { frameLoop(srcEl); }, 250); return;
+      }
+      var scale = Math.min(1, 1280 / Math.max(w, h));
+      grab.width = Math.round(w * scale); grab.height = Math.round(h * scale);
+      grab.getContext("2d").drawImage(srcEl, 0, 0, grab.width, grab.height);
+      grab.toBlob(function (blob) {
+        if (!blob) { setTimeout(function () { frameLoop(srcEl); }, 250); return; }
+        infer(blob, function (dets, ms) {
+          var n = draw(dets, grab.width, grab.height, srcEl);
+          report.textContent = n + " pieces · " + ms + " ms per frame.";
+        });
+        setTimeout(function () { frameLoop(srcEl); }, 350);
+      }, "image/jpeg", 0.85);
+    }
+
+    document.getElementById("btn-video").onclick = function () {
+      setMode("video", "btn-video"); document.getElementById("file-video").click();
+    };
+    document.getElementById("file-video").onchange = function () {
+      var f = this.files[0]; if (!f) return;
+      stage.style.display = "block"; img.style.display = "none"; vid.style.display = "block";
+      vid.srcObject = null; vid.src = URL.createObjectURL(f); vid.muted = true;
+      vid.onplay = function () { frameLoop(vid); };
+      vid.play();
+    };
+
+    document.getElementById("btn-cam").onclick = function () {
+      setMode("cam", "btn-cam");
+      stage.style.display = "block"; img.style.display = "none"; vid.style.display = "block";
+      vid.removeAttribute("src"); vid.controls = false;
+      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 } } })
+        .then(function (s) { camStream = s; vid.srcObject = s; vid.play(); frameLoop(vid); })
+        .catch(function (e) { report.textContent = "Camera error: " + e.message; });
+    };
+  })();
+  </script>
 
   <footer class="colophon">
     <p>Renders and self-labelled training data from <code>make_chess_scenes.py</code> and
