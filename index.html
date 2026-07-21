@@ -191,11 +191,8 @@ D:\chess-vision\venv\Scripts\python.exe vision\live_server.py
       </select>
     </label>
     <label style="font-size:13px;color:var(--ink-soft);align-self:center;">confidence
-      <input type="range" id="try-thr" min="0.3" max="0.9" step="0.05" value="0.7" style="vertical-align:middle;">
-      <span id="try-thr-out">0.70</span>
-    </label>
-    <label style="font-size:13px;color:var(--ink-soft);align-self:center;">
-      <input type="checkbox" id="try-boxes" style="vertical-align:middle;"> find pieces only
+      <input type="range" id="try-thr" min="0.3" max="0.9" step="0.05" value="0.6" style="vertical-align:middle;">
+      <span id="try-thr-out">0.60</span>
     </label>
   </div>
   <input type="file" id="file-photo" accept="image/*" style="display:none">
@@ -258,18 +255,14 @@ D:\chess-vision\venv\Scripts\python.exe vision\live_server.py
       var g = overlay.getContext("2d");
       g.clearRect(0, 0, overlay.width, overlay.height);
       var sx = overlay.width / srcW, sy = overlay.height / srcH;
-      var boxesOnly = document.getElementById("try-boxes").checked;
       g.lineWidth = 2; g.font = "12px sans-serif"; g.textBaseline = "bottom";
       var counts = 0;
       dets.forEach(function (d) {
-        var c = boxesOnly ? "#c78a2b"
-              : (d.color === "white" ? "#2f8f4e" : "#b03535");
+        var c = d.color === "white" ? "#2f8f4e" : "#b03535";
         g.strokeStyle = c; g.fillStyle = c;
         g.strokeRect(d.x0 * sx, d.y0 * sy, (d.x1 - d.x0) * sx, (d.y1 - d.y0) * sy);
-        if (!boxesOnly) {
-          g.fillText(d.color[0].toUpperCase() + " " + d.piece + " " + d.conf.toFixed(2),
-                     d.x0 * sx + 2, d.y0 * sy - 2);
-        }
+        g.fillText(d.color[0].toUpperCase() + " " + d.piece + " " + d.conf.toFixed(2),
+                   d.x0 * sx + 2, d.y0 * sy - 2);
         counts++;
       });
       return counts;
